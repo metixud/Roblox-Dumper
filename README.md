@@ -61,5 +61,4 @@ use `??` or `?` for wildcard bytes.
 ## notes
 
 - patterns break on roblox updates, you'll need to rescan and update them
-- run as admin or `OpenProcess` / `ReadProcessMemory` will fail
 - only scans `MEM_COMMIT` regions, skips `PAGE_GUARD` and `PAGE_NOACCESS`
