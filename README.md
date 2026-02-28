@@ -15,7 +15,7 @@ originally by **ducks**, updated by **metix**.
 
 currently shipped with two patterns:
 
-| name | description |
+| name 
 |---|---|
 | `luaD_throw`
 | `OpcodeLookupTable` 
