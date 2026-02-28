@@ -16,6 +16,7 @@ originally by **ducks**, updated by **metix**.
 currently shipped with two patterns:
 `luaD_throw`
 `OpcodeLookupTable` 
+`ScriptContextResume` 
 
 ---
 
