@@ -14,11 +14,8 @@ originally by **ducks**, updated by **metix**.
 - for each pattern, scans region by region and prints the result
 
 currently shipped with two patterns:
-
-| name 
-|---|---|
-| `luaD_throw`
-| `OpcodeLookupTable` 
+`luaD_throw`
+`OpcodeLookupTable` 
 
 ---
 
