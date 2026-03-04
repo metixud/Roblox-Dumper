@@ -163,8 +163,8 @@ int main() {
 
     std::vector<PatternInfo> patterns = {
         {"48 83 EC ? 44 8B C2 48 8B D1 48 8D 4C 24", "luaD_throw"},
-        {"48 8B C4 44 89 48 20 4C 89 40 18 48 89 50 10 48 89 48 08 53 56 57 41 54 41 55 41 56 41 57 48 81 EC B0 02 00 00 0F 29 70 B8 45 8B F9 4D 8B E0 48 8B FA 4C 8B C9 44 8B 15 30 85 D9 05 41 81 FA 00", "ScriptContextResume"}, // outdated on version-b4b85190815347e0
-        {"0E BE 24 A8 58 B0 12 63 8A 05 16 6C 06 D6 0A 28 52 18 0C 50 AE 68 84 5A 38 2C 5B 0F 36 19 70 D3 4D 11 8E 41 3C 7E 4C 71 DE E2 CA DB 1A C1 D0 E6 9E C2 20 3E F6 46 08 74 88 9D 29 C8 02 4A 8C 65", "OpcodeLookupTable"}, // outdated on version-b4b85190815347e0
+        {"48 8B C4 44 89 48 20 4C 89 40 18 48 89 50 10 48 89 48 08 53", "ScriptContextResume"},
+        {"3E 52 54", "OpcodeLookupTable"},
 
     };
 
