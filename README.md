@@ -63,3 +63,6 @@ use `??` or `?` for wildcard bytes.
 
 - patterns break on roblox updates, you'll need to rescan and update them
 - only scans `MEM_COMMIT` regions, skips `PAGE_GUARD` and `PAGE_NOACCESS`
+
+
+updated for : `version-d599f7fc52a8404c`
