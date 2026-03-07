@@ -13,7 +13,7 @@ originally by **ducks**, updated by **metix**.
 - walks through all committed, readable memory regions
 - for each pattern, scans region by region and prints the result
 
-currently shipped with three patterns:
+currently shipped with five patterns:
 `luaD_throw`
 `OpcodeLookupTable` 
 `ScriptContextResume` 
