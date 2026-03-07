@@ -6,7 +6,7 @@
 #include <string>
 #include <algorithm>
 #include <chrono>
-// made by ducks / updated by metix
+
 struct PatternInfo {
     std::string pattern;
     std::string name;
