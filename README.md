@@ -17,6 +17,8 @@ currently shipped with three patterns:
 `luaD_throw`
 `OpcodeLookupTable` 
 `ScriptContextResume` 
+`Ktable` 
+`Print` 
 
 ---
 
