@@ -4,11 +4,17 @@
 #include <iostream>
 #include <vector>
 #include <string>
-// made by ducks / updated by metix
+#include <algorithm>
+#include <chrono>
+
 struct PatternInfo {
     std::string pattern;
     std::string name;
 };
+
+constexpr SIZE_T mrc = 0x400000;
+constexpr auto rst = std::chrono::milliseconds(200);
+constexpr auto pst = std::chrono::seconds(5);
 
 bool PatternToBytes(const std::string& pattern, std::vector<BYTE>& bytes, std::string& mask) {
     bytes.clear();
@@ -43,6 +49,15 @@ bool PatternToBytes(const std::string& pattern, std::vector<BYTE>& bytes, std::s
         }
     }
     return true;
+}
+
+bool HasReadableProtection(DWORD protect) {
+    constexpr DWORD readableProtections =
+        PAGE_READONLY |
+        PAGE_READWRITE |
+        PAGE_EXECUTE_READ |
+        PAGE_EXECUTE_READWRITE;
+    return (protect & readableProtections) != 0;
 }
 
 bool DataCompare(const BYTE* data, const BYTE* pattern, const std::string& mask, size_t size) {
@@ -186,8 +201,10 @@ int main() {
         uintptr_t currentAddress = startAddress;
         bool foundPattern = false;
         size_t regionsScanned = 0;
+        auto patternStartTime = std::chrono::steady_clock::now();
+        bool patternTimeoutReached = false;
 
-        while (currentAddress < endAddress) {
+        while (currentAddress < endAddress && !foundPattern && !patternTimeoutReached) {
             if (VirtualQueryEx(hProcess, (LPCVOID)currentAddress, &memInfo, sizeof(memInfo)) == sizeof(memInfo)) {
                 regionsScanned++;
 
@@ -197,6 +214,13 @@ int main() {
                     memInfo.BaseAddress >= (LPCVOID)startAddress &&
                     (uintptr_t)memInfo.BaseAddress < endAddress) {
 
+                    if (!HasReadableProtection(memInfo.Protect)) {
+                        std::cerr << "[Skipped] Region at 0x" << std::hex << (uintptr_t)memInfo.BaseAddress
+                            << " has unsupported protections (0x" << memInfo.Protect << ")" << std::dec << std::endl;
+                        currentAddress = (uintptr_t)memInfo.BaseAddress + memInfo.RegionSize;
+                        continue;
+                    }
+
                     uintptr_t regionStart = (uintptr_t)memInfo.BaseAddress;
                     SIZE_T regionSize = memInfo.RegionSize;
 
@@ -204,14 +228,39 @@ int main() {
                         regionSize = endAddress - regionStart;
                     }
 
-                    uintptr_t found = ScanRegion(hProcess, regionStart, regionSize, patternBytes, mask);
-                    if (found) {
-                        uintptr_t offset = found - moduleBase;
-                        std::cout << "[" << patternInfo.name << "] Pattern found at address: 0x"
-                            << std::hex << found << " (offset: 0x" << offset << ")" << std::dec << std::endl;
-                        foundPattern = true;
-                        foundAny = true;
-                        break;
+                    uintptr_t regionEnd = regionStart + regionSize;
+                    uintptr_t chunkAddress = regionStart;
+
+                    while (chunkAddress < regionEnd && !foundPattern && !patternTimeoutReached) {
+                        SIZE_T chunkSize = static_cast<SIZE_T>(std::min<uintptr_t>(mrc, regionEnd - chunkAddress));
+                        auto chunkStartTime = std::chrono::steady_clock::now();
+                        uintptr_t found = ScanRegion(hProcess, chunkAddress, chunkSize, patternBytes, mask);
+                        auto chunkDuration = std::chrono::steady_clock::now() - chunkStartTime;
+                        auto chunkDurationMs = std::chrono::duration_cast<std::chrono::milliseconds>(chunkDuration).count();
+
+                        if (chunkDuration > rst) {
+                            std::cerr << "[Warning] Region chunk at 0x" << std::hex << chunkAddress
+                                << " took " << chunkDurationMs << " ms (" << chunkSize << " bytes)" << std::dec << std::endl;
+                        }
+
+                        if (found) {
+                            uintptr_t offset = found - moduleBase;
+                            std::cout << "[" << patternInfo.name << "] Pattern found at address: 0x"
+                                << std::hex << found << " (offset: 0x" << offset << ")" << std::dec << std::endl;
+                            foundPattern = true;
+                            foundAny = true;
+                            break;
+                        }
+
+                        chunkAddress += chunkSize;
+
+                        auto totalPatternTime = std::chrono::steady_clock::now() - patternStartTime;
+                        if (totalPatternTime > pst) {
+                            auto totalMs = std::chrono::duration_cast<std::chrono::milliseconds>(totalPatternTime).count();
+                            std::cerr << "[Timeout] Pattern \"" << patternInfo.name << "\" scanning took "
+                                << totalMs << " ms, aborting remaining regions." << std::endl;
+                            patternTimeoutReached = true;
+                        }
                     }
                 }
                 currentAddress = (uintptr_t)memInfo.BaseAddress + memInfo.RegionSize;
