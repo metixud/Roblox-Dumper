@@ -15,7 +15,7 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="Dumper\Ducks.cpp">
+    <ClCompile Include="Dumper\Metix.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
