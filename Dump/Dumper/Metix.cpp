@@ -165,7 +165,8 @@ int main() {
         {"48 83 EC ? 44 8B C2 48 8B D1 48 8D 4C 24", "luaD_throw"},
         {"48 8B C4 44 89 48 20 4C 89 40 18 48 89 50 10 48 89 48 08 53", "ScriptContextResume"},
         {"3E 52 54", "OpcodeLookupTable"},
-
+        {"48 89 54 24 10 4C 89 44 24 18 4C 89 4C 24 20 55", "rbx_print"},
+        {"4C 8D 0D ? ? ? ? 4D 8B 0C C1", "Ktable"},
     };
 
     uintptr_t startAddress = moduleBase;
