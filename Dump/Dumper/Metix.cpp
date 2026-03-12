@@ -153,7 +153,7 @@ std::pair<std::vector<char>, std::string> hexStringToPattern(const std::string& 
 
     while (stream >> byteString) {
         if (byteString == "?") {
-            bytes.push_back(0x00); 
+            bytes.push_back(0x00);  // Wildcard
             mask += '?';
         }
         else {
@@ -195,7 +195,7 @@ uintptr_t fastfindPattern(const std::string& hexPattern, bool extractOffset = fa
                 continue;
 
             const size_t plen = pattern.size();
-            if (plen > bytesRead) continue;
+            if (plen > bytesRead) continue; // Avoid scanning if pattern is larger than the read memory block
 
             for (size_t i = 0; i <= bytesRead - plen; ++i) {
                 bool match = true;
