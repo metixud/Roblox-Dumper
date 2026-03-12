@@ -6,12 +6,22 @@
 #include <string>
 #include <algorithm>
 #include <chrono>
+#include <map>
+#include <fstream>
+#include <sstream>
+#include <thread>
+#include <mutex>
+#include <atomic>
 
 struct PatternInfo {
     std::string pattern;
     std::string name;
 };
 
+HANDLE hProcess = nullptr;
+uintptr_t baseAddress = 0;
+SIZE_T baseSize = 0;
+std::mutex memoryMutex;
 constexpr SIZE_T mrc = 0x400000;
 constexpr auto rst = std::chrono::milliseconds(200);
 constexpr auto pst = std::chrono::seconds(5);
@@ -104,44 +114,156 @@ DWORD GetProcessIdByName(const std::wstring& processName) {
     return processId;
 }
 
-uintptr_t GetModuleBaseAddress(DWORD pid, const std::wstring& moduleName) {
-    uintptr_t baseAddress = 0;
-    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid);
-    if (snapshot == INVALID_HANDLE_VALUE) return 0;
-
-    MODULEENTRY32W moduleEntry;
-    moduleEntry.dwSize = sizeof(MODULEENTRY32W);
-
-    if (Module32FirstW(snapshot, &moduleEntry)) {
-        do {
-            if (moduleName == moduleEntry.szModule) {
-                baseAddress = (uintptr_t)moduleEntry.modBaseAddr;
-                break;
-            }
-        } while (Module32NextW(snapshot, &moduleEntry));
+bool attach(DWORD pid, const std::string& moduleName) {
+    std::lock_guard<std::mutex> lock(memoryMutex);
+    hProcess = OpenProcess(PROCESS_VM_READ | PROCESS_QUERY_INFORMATION | PROCESS_VM_OPERATION, NULL, pid);
+    if (!hProcess) {
+        std::cerr << "[-] Failed to open process. Error: " << GetLastError() << "\n";
+        return false;
     }
-    CloseHandle(snapshot);
-    return baseAddress;
+    HMODULE hMods[1024];
+    DWORD cbNeeded;
+    if (EnumProcessModules(hProcess, hMods, sizeof(hMods), &cbNeeded)) {
+        for (DWORD i = 0; i < (cbNeeded / sizeof(HMODULE)); i++) {
+            char szModName[MAX_PATH] = { 0 };
+            if (GetModuleBaseNameA(hProcess, hMods[i], szModName, sizeof(szModName) / sizeof(char))) {
+                if (_stricmp(szModName, moduleName.c_str()) == 0) {
+                    MODULEINFO modInfo = { 0 };
+                    if (GetModuleInformation(hProcess, hMods[i], &modInfo, sizeof(modInfo))) {
+                        baseAddress = reinterpret_cast<uintptr_t>(modInfo.lpBaseOfDll);
+                        baseSize = modInfo.SizeOfImage;
+                        std::cout << "[+] Attached to module: " << szModName << "\n";
+                        std::cout << "[+] Base Address: 0x" << std::hex << baseAddress << ", Size: 0x"
+                            << baseSize << std::dec << "\n";
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    std::cerr << "[-] Module not found: " << moduleName << "\n";
+    return false;
 }
 
-SIZE_T GetModuleSize(DWORD pid, const std::wstring& moduleName) {
-    SIZE_T moduleSize = 0;
-    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid);
-    if (snapshot == INVALID_HANDLE_VALUE) return 0;
+std::pair<std::vector<char>, std::string> hexStringToPattern(const std::string& hexPattern) {
+    std::vector<char> bytes;
+    std::string mask;
+    std::istringstream stream(hexPattern);
+    std::string byteString;
 
-    MODULEENTRY32W moduleEntry;
-    moduleEntry.dwSize = sizeof(MODULEENTRY32W);
-
-    if (Module32FirstW(snapshot, &moduleEntry)) {
-        do {
-            if (moduleName == moduleEntry.szModule) {
-                moduleSize = moduleEntry.modBaseSize;
-                break;
-            }
-        } while (Module32NextW(snapshot, &moduleEntry));
+    while (stream >> byteString) {
+        if (byteString == "?") {
+            bytes.push_back(0x00); 
+            mask += '?';
+        }
+        else {
+            bytes.push_back(static_cast<char>(strtol(byteString.c_str(), nullptr, 16)));
+            mask += 'x';
+        }
     }
-    CloseHandle(snapshot);
-    return moduleSize;
+    return { bytes, mask };
+}
+
+uintptr_t fastfindPattern(const std::string& hexPattern, bool extractOffset = false, const std::string& OffsetType = "dword") {
+    auto [pattern, mask] = hexStringToPattern(hexPattern);
+    if (pattern.empty() || pattern.size() != mask.size() || pattern.size() < 1) return 0; // Handles tiny patterns
+
+    HANDLE hProc = hProcess;
+    if (!hProc || hProc == INVALID_HANDLE_VALUE) return 0;
+
+    SYSTEM_INFO sysInfo;
+    GetSystemInfo(&sysInfo);
+    uintptr_t min = reinterpret_cast<uintptr_t>(sysInfo.lpMinimumApplicationAddress);
+    uintptr_t max = reinterpret_cast<uintptr_t>(sysInfo.lpMaximumApplicationAddress);
+
+    MEMORY_BASIC_INFORMATION mbi;
+    std::vector<char> buffer;
+
+    while (true) {
+        for (uintptr_t addr = min; addr < max; addr += mbi.RegionSize) {
+            if (!VirtualQueryEx(hProc, (LPCVOID)addr, &mbi, sizeof(mbi)))
+                continue;
+
+            if (mbi.State != MEM_COMMIT || !(mbi.Protect & (PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE)))
+                continue;
+
+            SIZE_T size = mbi.RegionSize;
+            buffer.resize(size);
+            SIZE_T bytesRead;
+
+            if (!ReadProcessMemory(hProc, (LPCVOID)mbi.BaseAddress, buffer.data(), size, &bytesRead))
+                continue;
+
+            const size_t plen = pattern.size();
+            if (plen > bytesRead) continue;
+
+            for (size_t i = 0; i <= bytesRead - plen; ++i) {
+                bool match = true;
+
+                for (size_t j = 0; j < plen; ++j) {
+                    if (mask[j] == 'x' && buffer[i + j] != pattern[j]) {
+                        match = false;
+                        break;
+                    }
+                }
+
+                if (match) {
+                    uintptr_t result = (uintptr_t)mbi.BaseAddress + i;
+
+                    if (extractOffset) {
+                        int32_t rel = 0;
+                        uintptr_t offsetAddr = result + 3;
+
+                        if (!ReadProcessMemory(hProc, (LPCVOID)offsetAddr, &rel, sizeof(rel), nullptr))
+                            continue;
+
+                        uintptr_t finalOffset = (OffsetType == "byte")
+                            ? result + rel + 7
+                            : offsetAddr + rel + sizeof(rel);
+
+                        if (finalOffset >= min && finalOffset < max)
+                            return finalOffset;
+                    }
+                    else {
+                        return result;
+                    }
+                }
+            }
+        }
+
+        Sleep(1); 
+    }
+}
+
+bool attach(DWORD pid, const std::string& moduleName) {
+    std::lock_guard<std::mutex> lock(memoryMutex);
+    hProcess = OpenProcess(PROCESS_VM_READ | PROCESS_QUERY_INFORMATION | PROCESS_VM_OPERATION, NULL, pid);
+    if (!hProcess) {
+        std::cerr << "[-] Failed to open process. Error: " << GetLastError() << "\n";
+        return false;
+    }
+    HMODULE hMods[1024];
+    DWORD cbNeeded;
+    if (EnumProcessModules(hProcess, hMods, sizeof(hMods), &cbNeeded)) {
+        for (DWORD i = 0; i < (cbNeeded / sizeof(HMODULE)); i++) {
+            char szModName[MAX_PATH] = { 0 };
+            if (GetModuleBaseNameA(hProcess, hMods[i], szModName, sizeof(szModName) / sizeof(char))) {
+                if (_stricmp(szModName, moduleName.c_str()) == 0) {
+                    MODULEINFO modInfo = { 0 };
+                    if (GetModuleInformation(hProcess, hMods[i], &modInfo, sizeof(modInfo))) {
+                        baseAddress = reinterpret_cast<uintptr_t>(modInfo.lpBaseOfDll);
+                        baseSize = modInfo.SizeOfImage;
+                        std::cout << "[+] Attached to module: " << szModName << "\n";
+                        std::cout << "[+] Base Address: 0x" << std::hex << baseAddress << ", Size: 0x"
+                            << baseSize << std::dec << "\n";
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    std::cerr << "[-] Module not found: " << moduleName << "\n";
+    return false;
 }
 
 int main() {
@@ -153,35 +275,21 @@ int main() {
         return 1;
     }
     std::cout << "Roblox PID: " << pid << std::endl;
-
-    uintptr_t moduleBase = GetModuleBaseAddress(pid, targetProcessName);
-    if (!moduleBase) {
-        std::cerr << "Failed to get module base address." << std::endl;
-        system("pause");
-        return 1;
-    }
-    std::cout << "Module Base Address: 0x" << std::hex << moduleBase << std::dec << std::endl;
-
-    SIZE_T moduleSize = GetModuleSize(pid, targetProcessName);
-    if (moduleSize == 0) {
-        std::cerr << "Failed to get module size." << std::endl;
+    if (!attach(pid, "RobloxPlayerBeta.exe")) {
+        std::cerr << "Failed to attach to process." << std::endl;
         system("pause");
         return 1;
     }
 
-    HANDLE hProcess = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, pid);
-    if (!hProcess) {
-        std::cerr << "Failed to open Roblox process." << std::endl;
-        system("pause");
-        return 1;
-    }
+    uintptr_t moduleBase = baseAddress;
+    SIZE_T moduleSize = baseSize;
 
     std::vector<PatternInfo> patterns = {
         {"48 83 EC ? 44 8B C2 48 8B D1 48 8D 4C 24", "luaD_throw"},
         {"48 8B C4 44 89 48 20 4C 89 40 18 48 89 50 10 48 89 48 08 53", "ScriptContextResume"},
-        {"3E 52 54", "OpcodeLookupTable"},
+        {"4C 38 02 8E FC 34 0C 70 00 1B A2 28 6C 6A 62 42 22 16 2A 53 0B 46 03 B0 C2 BC 36 7B 7C 63 32 90 20 3E 84 27 56 3B 58 DE BE 3C 7A 68 13 3F 50 5E CC 9C 66 D2 E2 8A B6 51 61 44 3A 52 23 4A 5F E1", "OpcodeLookupTable"},
         {"48 89 54 24 10 4C 89 44 24 18 4C 89 4C 24 20 55", "rbx_print"},
-        {"4C 8D 0D ? ? ? ? 4D 8B 0C C1", "Ktable"},
+        {"4C 8D 0D ? ? ? ? 4D 8B 0C C1", "KTable"},
     };
 
     uintptr_t startAddress = moduleBase;
@@ -191,6 +299,16 @@ int main() {
     bool foundAny = false;
 
     for (const auto& patternInfo : patterns) {
+        if (patternInfo.name == "KTable") {
+            uintptr_t ktableResult = fastfindPattern(patternInfo.pattern, true, "unk");
+            if (ktableResult) {
+                std::cout << "[" << patternInfo.name << "] Pattern found at address: 0x"
+                    << std::hex << ktableResult << " (offset: 0x" << (ktableResult - moduleBase) << ")" << std::dec << std::endl;
+                foundAny = true;
+                continue;
+            }
+        }
+
         std::vector<BYTE> patternBytes;
         std::string mask;
         if (!PatternToBytes(patternInfo.pattern, patternBytes, mask)) {
