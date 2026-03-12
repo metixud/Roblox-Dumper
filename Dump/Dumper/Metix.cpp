@@ -114,36 +114,6 @@ DWORD GetProcessIdByName(const std::wstring& processName) {
     return processId;
 }
 
-bool attach(DWORD pid, const std::string& moduleName) {
-    std::lock_guard<std::mutex> lock(memoryMutex);
-    hProcess = OpenProcess(PROCESS_VM_READ | PROCESS_QUERY_INFORMATION | PROCESS_VM_OPERATION, NULL, pid);
-    if (!hProcess) {
-        std::cerr << "[-] Failed to open process. Error: " << GetLastError() << "\n";
-        return false;
-    }
-    HMODULE hMods[1024];
-    DWORD cbNeeded;
-    if (EnumProcessModules(hProcess, hMods, sizeof(hMods), &cbNeeded)) {
-        for (DWORD i = 0; i < (cbNeeded / sizeof(HMODULE)); i++) {
-            char szModName[MAX_PATH] = { 0 };
-            if (GetModuleBaseNameA(hProcess, hMods[i], szModName, sizeof(szModName) / sizeof(char))) {
-                if (_stricmp(szModName, moduleName.c_str()) == 0) {
-                    MODULEINFO modInfo = { 0 };
-                    if (GetModuleInformation(hProcess, hMods[i], &modInfo, sizeof(modInfo))) {
-                        baseAddress = reinterpret_cast<uintptr_t>(modInfo.lpBaseOfDll);
-                        baseSize = modInfo.SizeOfImage;
-                        std::cout << "[+] Attached to module: " << szModName << "\n";
-                        std::cout << "[+] Base Address: 0x" << std::hex << baseAddress << ", Size: 0x"
-                            << baseSize << std::dec << "\n";
-                        return true;
-                    }
-                }
-            }
-        }
-    }
-    std::cerr << "[-] Module not found: " << moduleName << "\n";
-    return false;
-}
 
 std::pair<std::vector<char>, std::string> hexStringToPattern(const std::string& hexPattern) {
     std::vector<char> bytes;
