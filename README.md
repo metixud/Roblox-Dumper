@@ -2,7 +2,7 @@
 
 scans the memory of a running roblox process and looks for byte patterns inside the main module. prints the address and offset of each match.
 
-originally by **ducks**, updated by **metix**.
+Originally developed by **ducks**. Currently updated, maintained, and expanded by **metix**.
 
 ---
 
