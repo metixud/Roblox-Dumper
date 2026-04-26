@@ -15,7 +15,7 @@ Originally developed by **ducks**. Currently updated, maintained, and expanded b
 
 currently shipped with five patterns:
 `luaD_throw`
-`OpcodeLookupTable` NOT UPDATED
+`OpcodeLookupTable not updated`
 `ScriptContextResume` 
 `Ktable` 
 `Print` 
