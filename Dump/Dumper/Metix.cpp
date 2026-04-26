@@ -257,8 +257,8 @@ int main() {
     std::vector<PatternInfo> patterns = {
         {"48 83 EC ? 44 8B C2 48 8B D1 48 8D 4C 24", "luaD_throw"},
         {"48 8B C4 44 89 48 20 4C 89 40 18 48 89 50 10 48 89 48 08 53", "ScriptContextResume"},
-        {"4C 38 02 8E FC 34 0C 70 00 1B A2 28 6C 6A 62 42 22 16 2A 53 0B 46 03 B0 C2 BC 36 7B 7C 63 32 90 20 3E 84 27 56 3B 58 DE BE 3C 7A 68 13 3F 50 5E CC 9C 66 D2 E2 8A B6 51 61 44 3A 52 23 4A 5F E1", "OpcodeLookupTable"},
-        {"48 89 54 24 10 4C 89 44 24 18 4C 89 4C 24 20 55", "rbx_print"},
+     //   {"4C 38 02 8E FC 34 0C 70 00 1B A2 28 6C 6A 62 42 22 16 2A 53 0B 46 03 B0 C2 BC 36 7B 7C 63 32 90 20 3E 84 27 56 3B 58 DE BE 3C 7A 68 13 3F 50 5E CC 9C 66 D2 E2 8A B6 51 61 44 3A 52 23 4A 5F E1", "OpcodeLookupTable"}, i'm lazy to update it so ye
+        {"E8 ? ? ? ? EB ? 44 38 AE", "rbx_print"},
         {"4C 8D 0D ? ? ? ? 4D 8B 0C C1", "KTable"},
     };
 
@@ -277,6 +277,62 @@ int main() {
                 foundAny = true;
                 continue;
             }
+        }
+
+        if (patternInfo.name == "rbx_print") {
+            std::vector<BYTE> patternBytes;
+            std::string mask;
+            if (!PatternToBytes(patternInfo.pattern, patternBytes, mask)) {
+                std::cerr << "Failed to parse pattern for " << patternInfo.name << std::endl;
+                continue;
+            }
+
+            uintptr_t currentAddress = startAddress;
+            uintptr_t endAddress = moduleBase + moduleSize;
+            MEMORY_BASIC_INFORMATION memInfo;
+            bool foundPattern = false;
+
+            while (currentAddress < endAddress && !foundPattern) {
+                if (VirtualQueryEx(hProcess, (LPCVOID)currentAddress, &memInfo, sizeof(memInfo)) == sizeof(memInfo)) {
+                    if ((memInfo.State == MEM_COMMIT) &&
+                        !(memInfo.Protect & PAGE_GUARD) &&
+                        !(memInfo.Protect & PAGE_NOACCESS) &&
+                        HasReadableProtection(memInfo.Protect)) {
+
+                        uintptr_t regionStart = (uintptr_t)memInfo.BaseAddress;
+                        SIZE_T regionSize = memInfo.RegionSize;
+
+                        if (regionStart + regionSize > endAddress) {
+                            regionSize = endAddress - regionStart;
+                        }
+
+                        uintptr_t found = ScanRegion(hProcess, regionStart, regionSize, patternBytes, mask);
+                        if (found) {
+                            int32_t relOffset = 0;
+                            if (ReadProcessMemory(hProcess, (LPCVOID)(found + 1), &relOffset, sizeof(relOffset), nullptr)) {
+                                uintptr_t funcAddr = found + 5 + relOffset;
+                                uintptr_t funcOffset = funcAddr - moduleBase;
+                                std::cout << "[" << patternInfo.name << "] xref at: 0x"
+                                    << std::hex << found << " (offset: 0x" << (found - moduleBase) << ")"
+                                    << " -> rel : 0x" << (int32_t)relOffset
+                                    << " -> func at: 0x" << funcAddr
+                                    << " (rebased: 0x" << funcOffset << ")" << std::dec << std::endl;
+                                foundAny = true;
+                            }
+                            foundPattern = true;
+                            break;
+                        }
+                    }
+                    currentAddress = (uintptr_t)memInfo.BaseAddress + memInfo.RegionSize;
+                }
+                else {
+                    break;
+                }
+            }
+            if (!foundPattern) {
+                std::cout << "[" << patternInfo.name << "] Pattern not found in module." << std::endl;
+            }
+            continue;
         }
 
         std::vector<BYTE> patternBytes;
