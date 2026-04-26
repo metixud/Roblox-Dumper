@@ -15,7 +15,7 @@ Originally developed by **ducks**. Currently updated, maintained, and expanded b
 
 currently shipped with five patterns:
 `luaD_throw`
-`OpcodeLookupTable` 
+`OpcodeLookupTable` NOT UPDATED
 `ScriptContextResume` 
 `Ktable` 
 `Print` 
@@ -67,5 +67,4 @@ use `??` or `?` for wildcard bytes.
 - only scans `MEM_COMMIT` regions, skips `PAGE_GUARD` and `PAGE_NOACCESS`
 
 
-updated for : `version-b130242ed064436f`
-OUTDATED FOR LIVE.
+updated for : `version-2e6461290a3541f5`
