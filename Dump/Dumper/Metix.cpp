@@ -201,7 +201,7 @@ uintptr_t fastfindPattern(const std::string& hexPattern, bool extractOffset = fa
             }
         }
 
-        Sleep(1); 
+        Sleep(1);
     }
 }
 
@@ -245,6 +245,25 @@ int main() {
         return 1;
     }
     std::cout << "Roblox PID: " << pid << std::endl;
+
+    {
+        HANDLE hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+        if (hProc) {
+            wchar_t exePath[MAX_PATH] = {};
+            DWORD sz = MAX_PATH;
+            if (QueryFullProcessImageNameW(hProc, 0, exePath, &sz)) {
+                std::wstring path(exePath);
+                size_t pos = path.find(L"version-");
+                if (pos != std::wstring::npos) {
+                    size_t end = path.find(L'\\', pos);
+                    std::wstring ver = (end != std::wstring::npos) ? path.substr(pos, end - pos) : path.substr(pos);
+                    std::wcout << L"Roblox Version: " << ver << std::endl;
+                }
+            }
+            CloseHandle(hProc);
+        }
+    }
+
     if (!attach(pid, "RobloxPlayerBeta.exe")) {
         std::cerr << "Failed to attach to process." << std::endl;
         system("pause");
@@ -257,9 +276,24 @@ int main() {
     std::vector<PatternInfo> patterns = {
         {"48 83 EC ? 44 8B C2 48 8B D1 48 8D 4C 24", "luaD_throw"},
         {"48 8B C4 44 89 48 20 4C 89 40 18 48 89 50 10 48 89 48 08 53", "ScriptContextResume"},
-     //   {"4C 38 02 8E FC 34 0C 70 00 1B A2 28 6C 6A 62 42 22 16 2A 53 0B 46 03 B0 C2 BC 36 7B 7C 63 32 90 20 3E 84 27 56 3B 58 DE BE 3C 7A 68 13 3F 50 5E CC 9C 66 D2 E2 8A B6 51 61 44 3A 52 23 4A 5F E1", "OpcodeLookupTable"}, i'm lazy to update it so ye
+        {"48 89 5C 24 ? 48 89 74 24 ? 57 48 83 EC ? 49 8B F8 48 8B F2 48 8B D9 8B 81", "GetLuaStateForInstance"},
+        {"48 89 5C 24 ? 48 89 6C 24 ? 48 89 74 24 ? 57 48 83 EC ? 0F BE 15", "LuaF_Newproto"},
+        {"48 8B 0D ? ? ? ? 48 0F 44 FD", "IdentityPtr"},
+        {"48 89 5C 24 ? 57 48 83 EC ? 48 8B 99 ? ? ? ? 41 0F B6 F9", "FireTouchInterest"},
         {"E8 ? ? ? ? EB ? 44 38 AE", "rbx_print"},
         {"4C 8D 0D ? ? ? ? 4D 8B 0C C1", "KTable"},
+        {"48 89 5C 24 ? 57 48 83 EC ? 48 8B FA 48 8B D9 E8 ? ? ? ? 84 C0 74 ? 48 8B D7", "PushInstance"},
+        {"48 8D 0D ? ? ? ? E8 ? ? ? ? 4C 8B 5C 24", "OpcodeLookupTable"},
+        {"80 79 ? 00 0F 85 ? ? ? ? E9 ? ? ? ? ? 48 89 5C 24", "Luau_Execute"},
+        {"4C 8D 1D ? ? ? ? 49 83 C6", "LuaH_DummyNode"},
+        {"4C 8D 15 ? ? ? ? BF", "LuaO_NilObject"},
+        {"55 56 57 53 48 83 EC ? 48 8D 6C 24 ? 48 89 CF", "GetIdentityStruct"},
+        {"40 53 48 83 EC ? ? ? ? 4C 8B D9 ? ? ? 4C 8B D2", "Impersonator"},
+        {"4C 8B 35 ? ? ? ? BF", "Rawscheduler"},
+        {"E8 ? ? ? ? 48 8B F8 EB ? B8", "newgcoblock"},
+        {"E8 ? ? ? ? 4C 8B C0 49 63 40", "newclasspage"},
+        {"E8 ? ? ? ? 48 8D 50 ? 48 89 55", "newpage"},
+        {"E8 ? ? ? ? C7 43 ? ? ? ? ? 48 8B 4D", "FireProximityPrompt"},
     };
 
     uintptr_t startAddress = moduleBase;
@@ -269,6 +303,7 @@ int main() {
     bool foundAny = false;
 
     for (const auto& patternInfo : patterns) {
+
         if (patternInfo.name == "KTable") {
             uintptr_t ktableResult = fastfindPattern(patternInfo.pattern, true, "unk");
             if (ktableResult) {
@@ -277,6 +312,492 @@ int main() {
                 foundAny = true;
                 continue;
             }
+        }
+
+        if (patternInfo.name == "LuaH_DummyNode") {
+            std::vector<BYTE> patBytes;
+            std::string msk;
+            if (!PatternToBytes(patternInfo.pattern, patBytes, msk)) {
+                std::cerr << "Failed to parse pattern for " << patternInfo.name << std::endl;
+                continue;
+            }
+
+            uintptr_t cur = startAddress;
+            uintptr_t end = moduleBase + moduleSize;
+            MEMORY_BASIC_INFORMATION mbi;
+            bool found = false;
+
+            while (cur < end && !found) {
+                if (VirtualQueryEx(hProcess, (LPCVOID)cur, &mbi, sizeof(mbi)) == sizeof(mbi)) {
+                    if ((mbi.State == MEM_COMMIT) &&
+                        !(mbi.Protect & PAGE_GUARD) &&
+                        !(mbi.Protect & PAGE_NOACCESS) &&
+                        HasReadableProtection(mbi.Protect)) {
+
+                        uintptr_t regionStart = (uintptr_t)mbi.BaseAddress;
+                        SIZE_T regionSize = mbi.RegionSize;
+                        if (regionStart + regionSize > end)
+                            regionSize = end - regionStart;
+
+                        uintptr_t hit = ScanRegion(hProcess, regionStart, regionSize, patBytes, msk);
+                        if (hit) {
+                            int32_t rel = 0;
+                            if (ReadProcessMemory(hProcess, (LPCVOID)(hit + 3), &rel, sizeof(rel), nullptr)) {
+                                uintptr_t unkAddr = hit + 7 + rel;
+                                std::cout << "[" << patternInfo.name << "] unk at: 0x"
+                                    << std::hex << unkAddr << " (offset: 0x" << (unkAddr - moduleBase) << ")" << std::dec << std::endl;
+                                foundAny = true;
+                            }
+                            found = true;
+                        }
+                    }
+                    cur = (uintptr_t)mbi.BaseAddress + mbi.RegionSize;
+                }
+                else {
+                    break;
+                }
+            }
+            if (!found) {
+                std::cout << "[" << patternInfo.name << "] Pattern not found in module." << std::endl;
+            }
+            continue;
+        }
+
+        if (patternInfo.name == "LuaO_NilObject ") {
+            std::vector<BYTE> patBytes;
+            std::string msk;
+            if (!PatternToBytes(patternInfo.pattern, patBytes, msk)) {
+                std::cerr << "Failed to parse pattern for " << patternInfo.name << std::endl;
+                continue;
+            }
+
+            uintptr_t cur = startAddress;
+            uintptr_t end = moduleBase + moduleSize;
+            MEMORY_BASIC_INFORMATION mbi;
+            bool found = false;
+
+            while (cur < end && !found) {
+                if (VirtualQueryEx(hProcess, (LPCVOID)cur, &mbi, sizeof(mbi)) == sizeof(mbi)) {
+                    if ((mbi.State == MEM_COMMIT) &&
+                        !(mbi.Protect & PAGE_GUARD) &&
+                        !(mbi.Protect & PAGE_NOACCESS) &&
+                        HasReadableProtection(mbi.Protect)) {
+
+                        uintptr_t regionStart = (uintptr_t)mbi.BaseAddress;
+                        SIZE_T regionSize = mbi.RegionSize;
+                        if (regionStart + regionSize > end)
+                            regionSize = end - regionStart;
+
+                        uintptr_t hit = ScanRegion(hProcess, regionStart, regionSize, patBytes, msk);
+                        if (hit) {
+                            int32_t rel = 0;
+                            if (ReadProcessMemory(hProcess, (LPCVOID)(hit + 3), &rel, sizeof(rel), nullptr)) {
+                                uintptr_t unkAddr = hit + 7 + rel;
+                                std::cout << "[" << patternInfo.name << "] unk at: 0x"
+                                    << std::hex << unkAddr << " (offset: 0x" << (unkAddr - moduleBase) << ")" << std::dec << std::endl;
+                                foundAny = true;
+                            }
+                            found = true;
+                        }
+                    }
+                    cur = (uintptr_t)mbi.BaseAddress + mbi.RegionSize;
+                }
+                else {
+                    break;
+                }
+            }
+            if (!found) {
+                std::cout << "[" << patternInfo.name << "] Pattern not found in module." << std::endl;
+            }
+            continue;
+        }
+
+        if (patternInfo.name == "IdentityPtr") {
+            std::vector<BYTE> patBytes;
+            std::string msk;
+            if (!PatternToBytes(patternInfo.pattern, patBytes, msk)) {
+                std::cerr << "Failed to parse pattern for " << patternInfo.name << std::endl;
+                continue;
+            }
+
+            uintptr_t cur = startAddress;
+            uintptr_t end = moduleBase + moduleSize;
+            MEMORY_BASIC_INFORMATION mbi;
+            bool found = false;
+
+            while (cur < end && !found) {
+                if (VirtualQueryEx(hProcess, (LPCVOID)cur, &mbi, sizeof(mbi)) == sizeof(mbi)) {
+                    if ((mbi.State == MEM_COMMIT) &&
+                        !(mbi.Protect & PAGE_GUARD) &&
+                        !(mbi.Protect & PAGE_NOACCESS) &&
+                        HasReadableProtection(mbi.Protect)) {
+
+                        uintptr_t regionStart = (uintptr_t)mbi.BaseAddress;
+                        SIZE_T regionSize = mbi.RegionSize;
+                        if (regionStart + regionSize > end)
+                            regionSize = end - regionStart;
+
+                        uintptr_t hit = ScanRegion(hProcess, regionStart, regionSize, patBytes, msk);
+                        if (hit) {
+                            int32_t rel = 0;
+                            if (ReadProcessMemory(hProcess, (LPCVOID)(hit + 3), &rel, sizeof(rel), nullptr)) {
+                                uintptr_t qwordAddr = hit + 7 + rel;
+                                std::cout << "[" << patternInfo.name << "] qword at: 0x"
+                                    << std::hex << qwordAddr << " (offset: 0x" << (qwordAddr - moduleBase) << ")" << std::dec << std::endl;
+                                foundAny = true;
+                            }
+                            found = true;
+                        }
+                    }
+                    cur = (uintptr_t)mbi.BaseAddress + mbi.RegionSize;
+                }
+                else {
+                    break;
+                }
+            }
+            if (!found) {
+                std::cout << "[" << patternInfo.name << "] Pattern not found in module." << std::endl;
+            }
+            continue;
+        }
+
+        if (patternInfo.name == "OpcodeLookupTable") {
+            std::vector<BYTE> patBytes;
+            std::string msk;
+            if (!PatternToBytes(patternInfo.pattern, patBytes, msk)) {
+                std::cerr << "Failed to parse pattern for " << patternInfo.name << std::endl;
+                continue;
+            }
+
+            uintptr_t cur = startAddress;
+            uintptr_t end = moduleBase + moduleSize;
+            MEMORY_BASIC_INFORMATION mbi;
+            bool found = false;
+
+            while (cur < end && !found) {
+                if (VirtualQueryEx(hProcess, (LPCVOID)cur, &mbi, sizeof(mbi)) == sizeof(mbi)) {
+                    if ((mbi.State == MEM_COMMIT) &&
+                        !(mbi.Protect & PAGE_GUARD) &&
+                        !(mbi.Protect & PAGE_NOACCESS) &&
+                        HasReadableProtection(mbi.Protect)) {
+
+                        uintptr_t regionStart = (uintptr_t)mbi.BaseAddress;
+                        SIZE_T regionSize = mbi.RegionSize;
+                        if (regionStart + regionSize > end)
+                            regionSize = end - regionStart;
+
+                        uintptr_t hit = ScanRegion(hProcess, regionStart, regionSize, patBytes, msk);
+                        if (hit) {
+                            int32_t rel = 0;
+                            if (ReadProcessMemory(hProcess, (LPCVOID)(hit + 3), &rel, sizeof(rel), nullptr)) {
+                                uintptr_t byteAddr = hit + 7 + rel;
+                                std::cout << "[" << patternInfo.name << "] byte at: 0x"
+                                    << std::hex << byteAddr << " (offset: 0x" << (byteAddr - moduleBase) << ")" << std::dec << std::endl;
+                                foundAny = true;
+                            }
+                            found = true;
+                        }
+                    }
+                    cur = (uintptr_t)mbi.BaseAddress + mbi.RegionSize;
+                }
+                else {
+                    break;
+                }
+            }
+            if (!found) {
+                std::cout << "[" << patternInfo.name << "] Pattern not found in module." << std::endl;
+            }
+            continue;
+        }
+
+        if (patternInfo.name == "Rawscheduler") {
+            std::vector<BYTE> patBytes;
+            std::string msk;
+            if (!PatternToBytes(patternInfo.pattern, patBytes, msk)) {
+                std::cerr << "Failed to parse pattern for " << patternInfo.name << std::endl;
+                continue;
+            }
+
+            uintptr_t cur = startAddress;
+            uintptr_t end = moduleBase + moduleSize;
+            MEMORY_BASIC_INFORMATION mbi;
+            bool found = false;
+
+            while (cur < end && !found) {
+                if (VirtualQueryEx(hProcess, (LPCVOID)cur, &mbi, sizeof(mbi)) == sizeof(mbi)) {
+                    if ((mbi.State == MEM_COMMIT) &&
+                        !(mbi.Protect & PAGE_GUARD) &&
+                        !(mbi.Protect & PAGE_NOACCESS) &&
+                        HasReadableProtection(mbi.Protect)) {
+
+                        uintptr_t regionStart = (uintptr_t)mbi.BaseAddress;
+                        SIZE_T regionSize = mbi.RegionSize;
+                        if (regionStart + regionSize > end)
+                            regionSize = end - regionStart;
+
+                        uintptr_t hit = ScanRegion(hProcess, regionStart, regionSize, patBytes, msk);
+                        if (hit) {
+                            int32_t rel = 0;
+                            if (ReadProcessMemory(hProcess, (LPCVOID)(hit + 3), &rel, sizeof(rel), nullptr)) {
+                                uintptr_t qwordAddr = hit + 7 + rel;
+                                std::cout << "[" << patternInfo.name << "] qword at: 0x"
+                                    << std::hex << qwordAddr << " (offset: 0x" << (qwordAddr - moduleBase) << ")" << std::dec << std::endl;
+                                foundAny = true;
+                            }
+                            found = true;
+                        }
+                    }
+                    cur = (uintptr_t)mbi.BaseAddress + mbi.RegionSize;
+                }
+                else {
+                    break;
+                }
+            }
+            if (!found) {
+                std::cout << "[" << patternInfo.name << "] Pattern not found in module." << std::endl;
+            }
+            continue;
+        }
+
+        if (patternInfo.name == "newclasspage") {
+            std::vector<BYTE> patBytes;
+            std::string msk;
+            if (!PatternToBytes(patternInfo.pattern, patBytes, msk)) {
+                std::cerr << "Failed to parse pattern for " << patternInfo.name << std::endl;
+                continue;
+            }
+
+            uintptr_t cur = startAddress;
+            uintptr_t end = moduleBase + moduleSize;
+            MEMORY_BASIC_INFORMATION mbi;
+            bool found = false;
+
+            while (cur < end && !found) {
+                if (VirtualQueryEx(hProcess, (LPCVOID)cur, &mbi, sizeof(mbi)) == sizeof(mbi)) {
+                    if ((mbi.State == MEM_COMMIT) &&
+                        !(mbi.Protect & PAGE_GUARD) &&
+                        !(mbi.Protect & PAGE_NOACCESS) &&
+                        HasReadableProtection(mbi.Protect)) {
+
+                        uintptr_t regionStart = (uintptr_t)mbi.BaseAddress;
+                        SIZE_T regionSize = mbi.RegionSize;
+                        if (regionStart + regionSize > end)
+                            regionSize = end - regionStart;
+
+                        uintptr_t hit = ScanRegion(hProcess, regionStart, regionSize, patBytes, msk);
+                        if (hit) {
+                            int32_t rel = 0;
+                            if (ReadProcessMemory(hProcess, (LPCVOID)(hit + 1), &rel, sizeof(rel), nullptr)) {
+                                uintptr_t funcAddr = hit + 5 + rel;
+                                std::cout << "[" << patternInfo.name << "] func at: 0x"
+                                    << std::hex << funcAddr << " (offset: 0x" << (funcAddr - moduleBase) << ")" << std::dec << std::endl;
+                                foundAny = true;
+                            }
+                            found = true;
+                        }
+                    }
+                    cur = (uintptr_t)mbi.BaseAddress + mbi.RegionSize;
+                }
+                else {
+                    break;
+                }
+            }
+            if (!found) {
+                std::cout << "[" << patternInfo.name << "] Pattern not found in module." << std::endl;
+            }
+            continue;
+        }
+
+        if (patternInfo.name == "newpage") {
+            std::vector<BYTE> patBytes;
+            std::string msk;
+            if (!PatternToBytes(patternInfo.pattern, patBytes, msk)) {
+                std::cerr << "Failed to parse pattern for " << patternInfo.name << std::endl;
+                continue;
+            }
+
+            uintptr_t cur = startAddress;
+            uintptr_t end = moduleBase + moduleSize;
+            MEMORY_BASIC_INFORMATION mbi;
+            bool found = false;
+
+            while (cur < end && !found) {
+                if (VirtualQueryEx(hProcess, (LPCVOID)cur, &mbi, sizeof(mbi)) == sizeof(mbi)) {
+                    if ((mbi.State == MEM_COMMIT) &&
+                        !(mbi.Protect & PAGE_GUARD) &&
+                        !(mbi.Protect & PAGE_NOACCESS) &&
+                        HasReadableProtection(mbi.Protect)) {
+
+                        uintptr_t regionStart = (uintptr_t)mbi.BaseAddress;
+                        SIZE_T regionSize = mbi.RegionSize;
+                        if (regionStart + regionSize > end)
+                            regionSize = end - regionStart;
+
+                        uintptr_t hit = ScanRegion(hProcess, regionStart, regionSize, patBytes, msk);
+                        if (hit) {
+                            int32_t rel = 0;
+                            if (ReadProcessMemory(hProcess, (LPCVOID)(hit + 1), &rel, sizeof(rel), nullptr)) {
+                                uintptr_t funcAddr = hit + 5 + rel;
+                                std::cout << "[" << patternInfo.name << "] func at: 0x"
+                                    << std::hex << funcAddr << " (offset: 0x" << (funcAddr - moduleBase) << ")" << std::dec << std::endl;
+                                foundAny = true;
+                            }
+                            found = true;
+                        }
+                    }
+                    cur = (uintptr_t)mbi.BaseAddress + mbi.RegionSize;
+                }
+                else {
+                    break;
+                }
+            }
+            if (!found) {
+                std::cout << "[" << patternInfo.name << "] Pattern not found in module." << std::endl;
+            }
+            continue;
+        }
+
+        if (patternInfo.name == "newgcoblock") {
+            std::vector<BYTE> patBytes;
+            std::string msk;
+            if (!PatternToBytes(patternInfo.pattern, patBytes, msk)) {
+                std::cerr << "Failed to parse pattern for " << patternInfo.name << std::endl;
+                continue;
+            }
+
+            uintptr_t cur = startAddress;
+            uintptr_t end = moduleBase + moduleSize;
+            MEMORY_BASIC_INFORMATION mbi;
+            bool found = false;
+
+            while (cur < end && !found) {
+                if (VirtualQueryEx(hProcess, (LPCVOID)cur, &mbi, sizeof(mbi)) == sizeof(mbi)) {
+                    if ((mbi.State == MEM_COMMIT) &&
+                        !(mbi.Protect & PAGE_GUARD) &&
+                        !(mbi.Protect & PAGE_NOACCESS) &&
+                        HasReadableProtection(mbi.Protect)) {
+
+                        uintptr_t regionStart = (uintptr_t)mbi.BaseAddress;
+                        SIZE_T regionSize = mbi.RegionSize;
+                        if (regionStart + regionSize > end)
+                            regionSize = end - regionStart;
+
+                        uintptr_t hit = ScanRegion(hProcess, regionStart, regionSize, patBytes, msk);
+                        if (hit) {
+                            int32_t rel = 0;
+                            if (ReadProcessMemory(hProcess, (LPCVOID)(hit + 1), &rel, sizeof(rel), nullptr)) {
+                                uintptr_t funcAddr = hit + 5 + rel;
+                                std::cout << "[" << patternInfo.name << "] func at: 0x"
+                                    << std::hex << funcAddr << " (offset: 0x" << (funcAddr - moduleBase) << ")" << std::dec << std::endl;
+                                foundAny = true;
+                            }
+                            found = true;
+                        }
+                    }
+                    cur = (uintptr_t)mbi.BaseAddress + mbi.RegionSize;
+                }
+                else {
+                    break;
+                }
+            }
+            if (!found) {
+                std::cout << "[" << patternInfo.name << "] Pattern not found in module." << std::endl;
+            }
+            continue;
+        }
+
+        if (patternInfo.name == "FireProximityPrompt") {
+            std::vector<BYTE> patBytes;
+            std::string msk;
+            if (!PatternToBytes(patternInfo.pattern, patBytes, msk)) {
+                std::cerr << "Failed to parse pattern for " << patternInfo.name << std::endl;
+                continue;
+            }
+
+            uintptr_t cur = startAddress;
+            uintptr_t end = moduleBase + moduleSize;
+            MEMORY_BASIC_INFORMATION mbi;
+            bool found = false;
+
+            while (cur < end && !found) {
+                if (VirtualQueryEx(hProcess, (LPCVOID)cur, &mbi, sizeof(mbi)) == sizeof(mbi)) {
+                    if ((mbi.State == MEM_COMMIT) &&
+                        !(mbi.Protect & PAGE_GUARD) &&
+                        !(mbi.Protect & PAGE_NOACCESS) &&
+                        HasReadableProtection(mbi.Protect)) {
+
+                        uintptr_t regionStart = (uintptr_t)mbi.BaseAddress;
+                        SIZE_T regionSize = mbi.RegionSize;
+                        if (regionStart + regionSize > end)
+                            regionSize = end - regionStart;
+
+                        uintptr_t hit = ScanRegion(hProcess, regionStart, regionSize, patBytes, msk);
+                        if (hit) {
+                            int32_t rel = 0;
+                            if (ReadProcessMemory(hProcess, (LPCVOID)(hit + 1), &rel, sizeof(rel), nullptr)) {
+                                uintptr_t funcAddr = hit + 5 + rel;
+                                std::cout << "[" << patternInfo.name << "] func at: 0x"
+                                    << std::hex << funcAddr << " (offset: 0x" << (funcAddr - moduleBase) << ")" << std::dec << std::endl;
+                                foundAny = true;
+                            }
+                            found = true;
+                        }
+                    }
+                    cur = (uintptr_t)mbi.BaseAddress + mbi.RegionSize;
+                }
+                else {
+                    break;
+                }
+            }
+            if (!found) {
+                std::cout << "[" << patternInfo.name << "] Pattern not found in module." << std::endl;
+            }
+            continue;
+        }
+
+        if (patternInfo.name == "FireTouchInterest") {
+            std::vector<BYTE> patBytes;
+            std::string msk;
+            if (!PatternToBytes(patternInfo.pattern, patBytes, msk)) {
+                std::cerr << "Failed to parse pattern for " << patternInfo.name << std::endl;
+                continue;
+            }
+
+            uintptr_t cur = startAddress;
+            uintptr_t end = moduleBase + moduleSize;
+            MEMORY_BASIC_INFORMATION mbi;
+            bool found = false;
+
+            while (cur < end && !found) {
+                if (VirtualQueryEx(hProcess, (LPCVOID)cur, &mbi, sizeof(mbi)) == sizeof(mbi)) {
+                    if ((mbi.State == MEM_COMMIT) &&
+                        !(mbi.Protect & PAGE_GUARD) &&
+                        !(mbi.Protect & PAGE_NOACCESS) &&
+                        HasReadableProtection(mbi.Protect)) {
+
+                        uintptr_t regionStart = (uintptr_t)mbi.BaseAddress;
+                        SIZE_T regionSize = mbi.RegionSize;
+                        if (regionStart + regionSize > end)
+                            regionSize = end - regionStart;
+
+                        uintptr_t hit = ScanRegion(hProcess, regionStart, regionSize, patBytes, msk);
+                        if (hit) {
+                            std::cout << "[" << patternInfo.name << "] func at: 0x"
+                                << std::hex << hit << " (offset: 0x" << (hit - moduleBase) << ")" << std::dec << std::endl;
+                            foundAny = true;
+                            found = true;
+                        }
+                    }
+                    cur = (uintptr_t)mbi.BaseAddress + mbi.RegionSize;
+                }
+                else {
+                    break;
+                }
+            }
+            if (!found) {
+                std::cout << "[" << patternInfo.name << "] Pattern not found in module." << std::endl;
+            }
+            continue;
         }
 
         if (patternInfo.name == "rbx_print") {
@@ -312,11 +833,8 @@ int main() {
                             if (ReadProcessMemory(hProcess, (LPCVOID)(found + 1), &relOffset, sizeof(relOffset), nullptr)) {
                                 uintptr_t funcAddr = found + 5 + relOffset;
                                 uintptr_t funcOffset = funcAddr - moduleBase;
-                                std::cout << "[" << patternInfo.name << "] xref at: 0x"
-                                    << std::hex << found << " (offset: 0x" << (found - moduleBase) << ")"
-                                    << " -> rel : 0x" << (int32_t)relOffset
-                                    << " -> func at: 0x" << funcAddr
-                                    << " (rebased: 0x" << funcOffset << ")" << std::dec << std::endl;
+                                std::cout << "[" << patternInfo.name << "] func at: 0x"
+                                    << std::hex << funcAddr << " (offset: 0x" << funcOffset << ")" << std::dec << std::endl;
                                 foundAny = true;
                             }
                             foundPattern = true;
