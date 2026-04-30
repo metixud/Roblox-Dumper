@@ -15,10 +15,25 @@ Originally developed by **ducks**. Currently updated, maintained, and expanded b
 
 currently shipped with five patterns:
 `luaD_throw`
-`OpcodeLookupTable not updated`
-`ScriptContextResume` 
-`Ktable` 
-`Print` 
+`ScriptContextResume`
+`GetLuaStateForInstance`
+`LuaF_Newproto`
+`IdentityPtr`
+`FireTouchInterest`
+`rbx_print`
+`KTable`
+`PushInstance`
+`OpcodeLookupTable`
+`Luau_Execute`
+`LuaH_DummyNode`
+`LuaO_NilObject`
+`GetIdentityStruct`
+`Impersonator`
+`Rawscheduler`
+`newgcoblock`
+`newclasspage`
+`newpage`
+`FireProximityPrompt`
 
 ---
 
