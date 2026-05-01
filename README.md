@@ -13,7 +13,7 @@ Originally developed by **ducks**. Currently updated, maintained, and expanded b
 - walks through all committed, readable memory regions
 - for each pattern, scans region by region and prints the result
 
-currently shipped with five patterns:
+currently shipped with beaucoup patterns fdp :
 `luaD_throw`
 `ScriptContextResume`
 `GetLuaStateForInstance`
