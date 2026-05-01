@@ -363,7 +363,7 @@ int main() {
             continue;
         }
 
-        if (patternInfo.name == "LuaO_NilObject ") {
+        if (patternInfo.name == "LuaO_NilObject") {
             std::vector<BYTE> patBytes;
             std::string msk;
             if (!PatternToBytes(patternInfo.pattern, patBytes, msk)) {
