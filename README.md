@@ -1,3 +1,8 @@
+## DISCONTINUED
+## DISCONTINUED
+## DISCONTINUED
+## DISCONTINUED
+## DISCONTINUED
 # roblox offsets dumper ( pattern scanner )
 
 scans the memory of a running roblox process and looks for byte patterns inside the main module. prints the address and offset of each match.
